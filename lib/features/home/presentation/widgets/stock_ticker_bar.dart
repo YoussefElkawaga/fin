@@ -58,7 +58,7 @@ class _StockTickerBarState extends State<StockTickerBar> with SingleTickerProvid
           final stocks = provider.stockPrices;
           if (stocks == null) return const SizedBox();
 
-          final sortedStocks = List<StockPrice>.from(stocks)
+          final sortedStocks = List.from(stocks)
             ..sort((a, b) => b.currentPrice.compareTo(a.currentPrice));
 
           return Column(

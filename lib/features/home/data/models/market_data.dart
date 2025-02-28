@@ -16,6 +16,9 @@ class MarketData {
   final double volatilityIndex;
   final List<ChartData> historicalData;
   final String marketSentiment;
+  final Map<String, dynamic> overview;
+  final List<Map<String, dynamic>> gainers;
+  final Map<String, dynamic> indicators;
   
   MarketData({
     required this.currentPrice,
@@ -29,6 +32,9 @@ class MarketData {
     required this.volatilityIndex,
     required this.historicalData,
     this.marketSentiment = 'Neutral',
+    this.overview = const {},
+    this.gainers = const [],
+    this.indicators = const {},
   });
   
   factory MarketData.fromJson(Map<String, dynamic> json) => _$MarketDataFromJson(json);

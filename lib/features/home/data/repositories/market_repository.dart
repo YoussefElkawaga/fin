@@ -2,9 +2,13 @@ import 'package:fin/features/home/data/models/market_data.dart';
 import 'package:fin/core/network/api_client.dart';
 import 'dart:math';
 import 'package:fin/features/home/data/models/chart_data.dart';
+import 'package:fin/core/services/location_service.dart';
+import 'package:fin/features/home/data/models/market_overview.dart';
+import 'package:get_it/get_it.dart';
 
 class MarketRepository {
   final ApiClient _apiClient;
+  final LocationService _locationService = GetIt.I<LocationService>();
   
   MarketRepository(this._apiClient);
   
@@ -96,5 +100,32 @@ class MarketRepository {
       sentiment: news['sentiment'] ?? 'Neutral',
       publishedAt: DateTime.parse(news['published_at'] ?? DateTime.now().toIso8601String()),
     )).toList();
+  }
+
+  Future<String> getCurrentCountry() async {
+    try {
+      return await _locationService.getCountryCode();
+    } catch (e) {
+      return 'US'; // Default fallback
+    }
+  }
+
+  Future<MarketOverview> getMarketOverview(String countryCode) async {
+    try {
+      return await _locationService.getMarketOverview(countryCode);
+    } catch (e) {
+      // Return default market overview in case of error
+      return MarketOverview(
+        countryCode: countryCode,
+        marketData: {},
+        metrics: [],
+        status: MarketStatus(
+          volatility: 0.0,
+          trend: 'unknown',
+          sentiment: 'neutral',
+          confidence: 0.0,
+        ),
+      );
+    }
   }
 } 

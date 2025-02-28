@@ -6,31 +6,27 @@ import 'dart:math';
 import 'package:fin/features/home/data/models/chart_data.dart';
 import 'package:fin/core/network/api_client.dart';
 import 'package:get_it/get_it.dart';
-
-class StockPrice {
-  final String symbol;
-  final double currentPrice;
-  final double openPrice;
-  final double dayHigh;
-  final double dayLow;
-  final double volume;
-
-  StockPrice({
-    required this.symbol,
-    required this.currentPrice,
-    required this.openPrice,
-    required this.dayHigh,
-    required this.dayLow,
-    required this.volume,
-  });
-}
+import 'package:fin/core/services/location_service.dart';
+import 'package:fin/core/services/financial_advisor_service.dart';
+import 'package:flutter/services.dart';
+import 'package:fin/core/services/financial_data_service.dart';
+import 'package:fin/features/home/data/models/price_alert.dart';
+import 'package:fin/features/home/data/models/market_overview.dart';
+import 'package:fin/features/home/data/models/stock_price.dart';
 
 class MarketDataProvider extends ChangeNotifier {
   final MarketRepository _repository;
+  final FinancialDataService _financialService;
   Timer? _updateTimer;
   Timer? _priceUpdateTimer;
   
-  MarketDataProvider(this._repository) {
+  final LocationService _locationService = GetIt.I<LocationService>();
+  final FinancialAdvisorService _advisorService = GetIt.I<FinancialAdvisorService>();
+  List<FinancialAdvice>? _financialAdvice;
+  String? _currentCountry;
+  MarketOverview? _marketOverview;
+  
+  MarketDataProvider(this._repository, this._financialService) {
     // Start listening to real-time updates
     final apiClient = GetIt.instance.get<ApiClient>();
     apiClient.setOnPriceUpdateCallback(_handleRealTimeUpdate);
@@ -100,10 +96,11 @@ class MarketDataProvider extends ChangeNotifier {
     
     // Initial load
     refreshData();
+    _initializeLocationBasedServices();
   }
   
   MarketData? _marketData;
-  bool _isLoading = false;
+  bool _isLoading = true;
   String? _error;
   
   MarketData? get marketData => _marketData;
@@ -127,6 +124,14 @@ class MarketDataProvider extends ChangeNotifier {
     final squaredDiffs = changes.map((c) => (c - avgChange) * (c - avgChange));
     return sqrt(squaredDiffs.reduce((a, b) => a + b) / changes.length);
   }
+
+  List<FinancialAdvice>? get financialAdvice => _financialAdvice;
+  String? get currentCountry => _currentCountry;
+
+  final List<PriceAlert> _priceAlerts = [];
+  List<PriceAlert> get priceAlerts => _priceAlerts;
+
+  MarketOverview? get marketOverview => _marketOverview;
 
   void updateTimeframe(String timeframe) async {
     if (_currentTimeframe == timeframe) return;
@@ -220,6 +225,8 @@ class MarketDataProvider extends ChangeNotifier {
     notifyListeners();
     
     try {
+      _currentCountry = await _repository.getCurrentCountry();
+      _marketOverview = await _repository.getMarketOverview(_currentCountry!);
       final response = await _repository.getMarketData(timeframe: _currentTimeframe);
       _marketData = response;
       
@@ -246,6 +253,8 @@ class MarketDataProvider extends ChangeNotifier {
         historicalData: _chartData!,
         marketSentiment: _getMarketSentiment(),
       );
+      
+      await refreshAdvice();
       
       _error = null;
     } catch (e) {
@@ -319,6 +328,9 @@ class MarketDataProvider extends ChangeNotifier {
         );
       }
       
+      // Check price alerts after updating prices
+      _checkPriceAlerts(_stockPrices ?? []);
+      
       notifyListeners();
     }
   }
@@ -346,6 +358,240 @@ class MarketDataProvider extends ChangeNotifier {
         notifyListeners();
       }
     });
+  }
+
+  Future<void> _initializeLocationBasedServices() async {
+    try {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+      
+      // Check if location services are enabled
+      final isEnabled = await _locationService.isLocationEnabled();
+      if (!isEnabled) {
+        _error = kIsWeb
+          ? 'Please enable location access in your browser settings.'
+          : 'Please enable location services in your device settings.';
+        notifyListeners();
+        _currentCountry = 'US'; // Fallback
+        await refreshAdvice();
+        return;
+      }
+      
+      int maxAttempts = 3;
+      int attempt = 0;
+      String? countryCode;
+      
+      while (attempt < maxAttempts && countryCode == null) {
+        try {
+          countryCode = await _locationService.getCountryCode()
+              .timeout(
+                const Duration(seconds: 15),
+                onTimeout: () => throw PlatformException(
+                  code: 'TIMEOUT',
+                  message: 'Location request timed out. Retrying...',
+                ),
+              );
+              
+          if (countryCode != null) {
+            _error = null;
+            _currentCountry = countryCode;
+            await refreshAdvice();
+            break;
+          }
+        } catch (e) {
+          print('Attempt $attempt failed: $e');
+          await Future.delayed(const Duration(seconds: 2));
+          attempt++;
+          
+          if (attempt < maxAttempts) {
+            _error = 'Retrying to get location... (Attempt ${attempt + 1}/$maxAttempts)';
+            notifyListeners();
+          }
+        }
+      }
+
+      if (countryCode == null) {
+        _error = 'Unable to get location. Using default location.';
+        _currentCountry = 'US'; // Fallback to US
+        await refreshAdvice();
+      }
+      
+    } catch (e) {
+      if (e is PlatformException) {
+        _error = e.message ?? 'Location services error';
+      } else {
+        _error = kIsWeb 
+          ? 'Please enable location services in your browser settings.'
+          : 'Unable to access location services. Using default location.';
+      }
+      _currentCountry = 'US'; // Fallback to US
+      await refreshAdvice();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Method to manually retry location services
+  Future<void> retryLocationServices() async {
+    try {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+
+      // First check if location services are enabled
+      final isEnabled = await _locationService.isLocationEnabled();
+      if (!isEnabled) {
+        throw PlatformException(
+          code: 'LOCATION_DISABLED',
+          message: kIsWeb
+            ? 'Please enable location access in your browser settings.'
+            : 'Please enable location services in your device settings.',
+        );
+      }
+
+      // Try to get country code with timeout
+      _currentCountry = await _locationService.getCountryCode()
+          .timeout(
+            const Duration(seconds: 20),
+            onTimeout: () => throw PlatformException(
+              code: 'TIMEOUT',
+              message: 'Location request timed out. Please try again.',
+            ),
+          );
+
+      if (_currentCountry != null) {
+        _error = null;
+        await refreshAdvice();
+      } else {
+        throw PlatformException(
+          code: 'LOCATION_ERROR',
+          message: 'Unable to determine your location.',
+        );
+      }
+      
+    } catch (e) {
+      _currentCountry = 'US'; // Fallback
+      if (e is PlatformException) {
+        _error = '${e.message}. Using default location (US).';
+      } else {
+        _error = 'Location error: ${e.toString()}. Using default location (US).';
+      }
+      await refreshAdvice();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshAdvice() async {
+    if (_currentCountry != null && _marketData != null) {
+      _financialAdvice = await _advisorService.generateAdvice(
+        _currentCountry!,
+        _marketData!,
+      );
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchMarketData() async {
+    try {
+      final overview = await _financialService.getMarketOverview(_currentCountry ?? 'US');
+      final gainers = await _financialService.getTopGainers();
+      final indicators = await _financialService.getEconomicIndicators(_currentCountry ?? 'US');
+      
+      _marketData = MarketData(
+        currentPrice: overview['price'] ?? 0.0,
+        percentageChange: overview['change'] ?? 0.0,
+        riskScore: _calculateRiskScore(),
+        sentiment: _calculateMarketSentiment(),
+        recentNews: _marketData?.recentNews ?? [],
+        totalVolume: overview['volume'] ?? 0.0,
+        advancingStocks: advancingStocks,
+        decliningStocks: decliningStocks,
+        volatilityIndex: volatilityIndex,
+        historicalData: _chartData ?? [],
+        overview: overview,
+        gainers: gainers,
+        indicators: indicators,
+      );
+      notifyListeners();
+    } catch (e) {
+      _error = 'Failed to fetch market data: ${e.toString()}';
+      notifyListeners();
+    }
+  }
+
+  void startDataUpdates() {
+    _updateTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      fetchMarketData();
+    });
+  }
+
+  void addPriceAlert(PriceAlert alert) {
+    _priceAlerts.add(alert);
+    notifyListeners();
+  }
+
+  void removePriceAlert(PriceAlert alert) {
+    _priceAlerts.remove(alert);
+    notifyListeners();
+  }
+
+  void _checkPriceAlerts(List<StockPrice> prices) {
+    for (final alert in _priceAlerts) {
+      if (!alert.isEnabled) continue;
+      
+      final stock = prices.firstWhere(
+        (s) => s.symbol == alert.symbol,
+        orElse: () => StockPrice(
+          symbol: alert.symbol,
+          currentPrice: 0,
+          openPrice: 0,
+          dayHigh: 0,
+          dayLow: 0,
+          volume: 0,
+        ),
+      );
+      
+      if (stock.currentPrice == 0) continue;
+
+      if (alert.isAbove && stock.currentPrice >= alert.targetPrice) {
+        _showNotification(
+          'Price Alert: ${alert.symbol}',
+          'Price has risen above \$${alert.targetPrice}',
+        );
+      } else if (!alert.isAbove && stock.currentPrice <= alert.targetPrice) {
+        _showNotification(
+          'Price Alert: ${alert.symbol}',
+          'Price has fallen below \$${alert.targetPrice}',
+        );
+      }
+    }
+  }
+
+  void _showNotification(String title, String body) {
+    // TODO: Implement actual notification logic using your preferred notification package
+    print('Notification: $title - $body');
+  }
+
+  void toggleAlertEnabled(PriceAlert alert, bool enabled) {
+    final index = _priceAlerts.indexOf(alert);
+    if (index != -1) {
+      _priceAlerts[index] = PriceAlert(
+        symbol: alert.symbol,
+        targetPrice: alert.targetPrice,
+        isAbove: alert.isAbove,
+        isEnabled: enabled,
+      );
+      notifyListeners();
+    }
+  }
+
+  void deleteAlert(PriceAlert alert) {
+    _priceAlerts.remove(alert);
+    notifyListeners();
   }
 
   @override

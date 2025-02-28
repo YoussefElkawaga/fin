@@ -13,26 +13,35 @@ class ApiClient {
   WebSocketChannel? _channel;
   Function(List<Map<String, dynamic>>)? _onPriceUpdateCallback;
   
-  // Yahoo Finance API endpoint
-  static const String _yahooBaseUrl = 'https://query1.finance.yahoo.com/v8/finance/chart';
+  // Update base URL to use Yahoo Finance API
+  static const String _baseUrl = 'https://query1.finance.yahoo.com/v8/finance';
   static const String _finnhubWsUrl = 'wss://ws.finnhub.io';
-  static const String _finnhubApiKey = 'YOUR_FINNHUB_API_KEY'; // Get free key from finnhub.io
+  static const String _finnhubApiKey = 'cv0m0hpr01qo8sshj2t0cv0m0hpr01qo8sshj2tg'; // Get free key from finnhub.io
   static const List<String> _symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA'];
   
   ApiClient() {
     _dio = Dio(BaseOptions(
       baseUrl: kIsWeb 
-          ? 'https://cors-anywhere.herokuapp.com/https://query1.finance.yahoo.com'
-          : 'https://query1.finance.yahoo.com',
-      connectTimeout: const Duration(seconds: 5),
-      receiveTimeout: const Duration(seconds: 3),
+          ? 'https://cors-anywhere.herokuapp.com/$_baseUrl'
+          : _baseUrl,
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
     ));
-    _dio.interceptors.add(LogInterceptor(
-      requestHeader: true,
-      responseHeader: true,
-      responseBody: true,
-      error: true,
+
+    _dio.interceptors.add(InterceptorsWrapper(
+      onError: (error, handler) {
+        // Fall back to mock data on error
+        if (error.type == DioExceptionType.connectionError) {
+          return handler.resolve(_getMockData());
+        }
+        return handler.next(error);
+      },
     ));
+
     _initializeWebSocket();
   }
   
@@ -174,25 +183,18 @@ class ApiClient {
   }
 
   Response _getMockData() {
-    // Your existing mock data implementation
     return Response(
       requestOptions: RequestOptions(path: '/market/data'),
       data: {
-        'earnings': [
-          {
-            'company_name': 'Apple Inc.',
-            'price': 175.84,
-            'change_percent': 2.3,
-            'market_cap': '2.8T',
-            'volume': '55.3M'
+        'status': 'success',
+        'country': 'US',
+        'data': {
+          'market_overview': {
+            'index_value': 4185.82,
+            'change_percent': 0.75,
+            'volume': '125M',
           },
-          // ... other mock data
-        ],
-        'market_summary': {
-          'total_volume': '205.7M',
-          'average_change': 1.1,
-          'market_sentiment': 'Positive',
-          'volatility_index': 15.3
+          // Add other mock data as needed
         }
       },
       statusCode: 200,
@@ -203,4 +205,6 @@ class ApiClient {
   void dispose() {
     _channel?.sink.close();
   }
+
+  Dio get dio => _dio;
 } 

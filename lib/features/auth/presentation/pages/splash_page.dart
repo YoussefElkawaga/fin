@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fin/features/home/presentation/pages/home_page.dart';
+import 'package:fin/features/auth/presentation/pages/login_page.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -16,18 +18,24 @@ class _SplashPageState extends State<SplashPage> {
   }
 
   Future<void> _initializeApp() async {
-    // Add initialization logic here
     await Future.delayed(const Duration(seconds: 2));
     
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomePage()),
-      );
-    }
+    if (!mounted) return;
+
+    // Check if user is logged in
+    final user = FirebaseAuth.instance.currentUser;
+    
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => user != null ? const HomePage() : const LoginPage(),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return Scaffold(
       body: Center(
         child: Column(
@@ -35,7 +43,10 @@ class _SplashPageState extends State<SplashPage> {
           children: [
             Text(
               'Fin',
-              style: Theme.of(context).textTheme.headlineLarge,
+              style: theme.textTheme.headlineLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
             ),
             const SizedBox(height: 16),
             const CircularProgressIndicator(),
